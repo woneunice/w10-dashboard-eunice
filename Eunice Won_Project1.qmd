@@ -1,0 +1,329 @@
+---
+title: "ODI Grips Instagram Performance Dashboard"
+author: "Eunice Won"
+format:
+  dashboard:
+    theme: cosmo
+    orientation: columns
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(plotly)
+library(gt)
+library(janitor)
+library(dplyr)
+```
+
+```{r}
+odi <- read_csv("merged_odi_dataset.csv") |>
+  clean_names() |>
+  mutate(
+    post_date = suppressWarnings(mdy(post_date)),
+    post_date = if_else(is.na(post_date), suppressWarnings(ymd(post_date)), post_date),
+    caption_type = if_else(is.na(caption_type) | caption_type == "", "Other", caption_type)
+  )
+```
+
+```{r}
+engagement_by_type <- odi |>
+  group_by(caption_type) |>
+  summarise(
+    avg_engagement_rate = mean(engagement_rate, na.rm = TRUE),
+    posts = n(),
+    .groups = "drop"
+  ) |>
+  arrange(avg_engagement_rate)
+
+interaction_summary <- odi |>
+  group_by(caption_type) |>
+  summarise(
+    Likes = mean(likes, na.rm = TRUE),
+    Comments = mean(comments, na.rm = TRUE),
+    Shares = mean(shares, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = c(Likes, Comments, Shares),
+    names_to = "metric",
+    values_to = "value"
+  ) |>
+  group_by(caption_type) |>
+  mutate(max_value = max(value, na.rm = TRUE)) |>
+  ungroup() |>
+  mutate(
+    caption_type = forcats::fct_reorder(caption_type, max_value),
+    log_value = log10(value + 1),
+    hover_text = paste0(
+      "Caption Type: ", caption_type,
+      "<br>Metric: ", metric,
+      "<br>Average Value: ", comma(round(value, 1))
+    )
+  )
+
+monthly_posts <- odi |>
+  filter(!is.na(post_date)) |>
+  mutate(month = floor_date(post_date, "month")) |>
+  group_by(month) |>
+  summarise(posts = n(), .groups = "drop")
+
+monthly_engagement <- odi |>
+  filter(!is.na(post_date)) |>
+  mutate(month = floor_date(post_date, "month")) |>
+  group_by(month) |>
+  summarise(
+    avg_engagement_rate = mean(engagement_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_table <- odi |>
+  group_by(caption_type) |>
+  summarise(
+    posts = n(),
+    avg_likes = round(mean(likes, na.rm = TRUE), 1),
+    avg_comments = round(mean(comments, na.rm = TRUE), 1),
+    avg_shares = round(mean(shares, na.rm = TRUE), 1),
+    avg_engagement_rate = mean(engagement_rate, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(avg_engagement_rate))
+
+top_engagement <- summary_table |> slice_max(avg_engagement_rate, n = 1)
+top_likes <- summary_table |> slice_max(avg_likes, n = 1)
+```
+
+# Overview
+
+## Story {width="35%"}
+
+**Objective**  
+This dashboard answers one simple question: **which ODI Grips Instagram content types perform best overall?**
+
+**Approach**  
+The goal is to make the results easy to understand for someone without a data or marketing analytics background.
+
+**What We’re Looking At**  
+Not every type of Instagram content performs the same way. Some categories generate stronger engagement and interaction than others.
+
+**Why This Matters**  
+Understanding these differences helps ODI Grips decide what kinds of posts to prioritize in future content planning.
+
+## Key Metrics {width="35%" layout-ncol="2"}
+
+### Total Posts
+
+```{r}
+#| content: valuebox
+#| height: 110
+list(
+  icon = "images",
+  color = "primary",
+  value = nrow(odi)
+)
+```
+
+### Average Engagement
+
+```{r}
+#| content: valuebox
+#| height: 110
+list(
+  icon = "graph-up",
+  color = "success",
+  value = percent(mean(odi$engagement_rate, na.rm = TRUE), accuracy = 0.1)
+)
+```
+
+### Average Likes
+
+```{r}
+#| content: valuebox
+#| height: 110
+list(
+  icon = "heart-fill",
+  color = "danger",
+  value = comma(round(mean(odi$likes, na.rm = TRUE), 0))
+)
+```
+
+### Average Shares
+
+```{r}
+#| content: valuebox
+#| height: 110
+list(
+  icon = "share-fill",
+  color = "warning",
+  value = comma(round(mean(odi$shares, na.rm = TRUE), 0))
+)
+```
+
+## Key Insights {width="30%"}
+
+**Top Performer**  
+`r top_engagement$caption_type` drives the highest engagement at  
+`r percent(top_engagement$avg_engagement_rate, accuracy = 0.1)`.
+
+**Audience Response**  
+`r top_likes$caption_type` generates the highest average likes  
+(`r comma(round(top_likes$avg_likes, 0))` per post).
+
+**Pattern Observed**  
+Content tied to promotions, products, and storytelling tends to perform better, while informational or announcement-style posts lag behind.
+
+**Business Takeaway**  
+ODI Grips should prioritize high-performing content types and use them as a foundation for future posting strategy.
+
+# Content Performance
+
+## Engagement by Caption Type
+
+```{r}
+engagement_by_type <- engagement_by_type |>
+  mutate(
+    highlight = if_else(
+      avg_engagement_rate == max(avg_engagement_rate),
+      "Top",
+      "Other"
+    )
+  )
+
+plot_ly(
+  data = engagement_by_type,
+  x = ~avg_engagement_rate,
+  y = ~reorder(caption_type, avg_engagement_rate),
+  type = "bar",
+  orientation = "h",
+  color = ~highlight,
+  colors = c("Top" = "#1B9E77", "Other" = "#D9D9D9"),
+  text = ~paste0(percent(avg_engagement_rate, 0.1)),
+  textposition = "outside",
+  hoverinfo = "none"
+) |>
+layout(
+  title = "Which Content Performs Best?",
+  xaxis = list(tickformat = ".1%"),
+  yaxis = list(title = ""),
+  showlegend = FALSE,
+  margin = list(l = 140, r = 40, t = 60, b = 50)
+)
+```
+
+## Interaction Comparison
+
+```{r}
+plot_ly(
+  data = interaction_summary,
+  x = ~log_value,
+  y = ~caption_type,
+  color = ~metric,
+  colors = c("Likes" = "#2C7FB8", "Comments" = "#41AB5D", "Shares" = "#F16913"),
+  type = "bar",
+  orientation = "h",
+  text = ~hover_text,
+  hoverinfo = "text"
+) |>
+  layout(
+    barmode = "group",
+    title = list(text = "Average Interaction Metrics by Content Type"),
+    xaxis = list(title = "Log-Scaled Average Count"),
+    yaxis = list(title = "Caption Type"),
+    margin = list(l = 120, r = 20, t = 50, b = 50),
+    legend = list(title = list(text = "Metric"))
+  )
+```
+
+## Interpretation
+
+These charts show that content performance is not evenly distributed across caption types. Some categories consistently produce stronger engagement, while others lag behind.
+
+The interaction chart also shows that likes, comments, and shares do not move in exactly the same way, which means ODI Grips should evaluate content from more than one angle.
+
+# Trends
+
+## Posting Volume Trend
+
+```{r}
+plot_ly(
+  data = monthly_posts,
+  x = ~month,
+  y = ~posts,
+  type = "scatter",
+  mode = "lines+markers",
+  line = list(color = "#2C7FB8", width = 2),
+  marker = list(color = "#2C7FB8", size = 7),
+  text = ~paste0(
+    "Month: ", format(month, "%b %Y"),
+    "<br>Posts: ", posts
+  ),
+  hoverinfo = "text"
+) |>
+  layout(
+    title = list(text = "Posting Volume Over Time"),
+    xaxis = list(title = ""),
+    yaxis = list(title = "Number of Posts"),
+    margin = list(l = 60, r = 20, t = 50, b = 50)
+  )
+```
+
+## Engagement Trend
+
+```{r}
+plot_ly(
+  data = monthly_engagement,
+  x = ~month,
+  y = ~avg_engagement_rate,
+  type = "scatter",
+  mode = "lines+markers",
+  line = list(color = "#41AB5D", width = 2),
+  marker = list(color = "#41AB5D", size = 7),
+  text = ~paste0(
+    "Month: ", format(month, "%b %Y"),
+    "<br>Average Engagement Rate: ", percent(avg_engagement_rate, accuracy = 0.1)
+  ),
+  hoverinfo = "text"
+) |>
+  layout(
+    title = list(text = "Average Engagement Rate Over Time"),
+    xaxis = list(title = ""),
+    yaxis = list(title = "Average Engagement Rate", tickformat = ".1%"),
+    margin = list(l = 60, r = 20, t = 50, b = 50)
+  )
+```
+
+## Interpretation
+
+These two trend charts help show how overall activity changed over time. One chart focuses on how often ODI Grips posted, while the other focuses on how well posts performed on average.
+
+Together, they help separate posting frequency from posting effectiveness.
+
+# Summary Table
+
+## Performance Summary
+
+```{r}
+summary_table |>
+  mutate(avg_engagement_rate = percent(avg_engagement_rate, accuracy = 0.1)) |>
+  gt() |>
+  tab_header(title = "Performance Summary by Caption Type") |>
+  cols_label(
+    caption_type = "Caption Type",
+    posts = "Posts",
+    avg_likes = "Avg Likes",
+    avg_comments = "Avg Comments",
+    avg_shares = "Avg Shares",
+    avg_engagement_rate = "Avg Engagement Rate"
+  )
+```
+
+## Final Interpretation
+
+The dashboard suggests that ODI Grips gets stronger results from some types of Instagram content than others. Content categories with higher engagement rates and stronger interaction metrics appear to create more audience response.
+
+From a marketing perspective, this means the brand can use past post performance to guide future content planning. Instead of treating every post category the same, ODI Grips can focus more on the content types that are more likely to drive engagement.
